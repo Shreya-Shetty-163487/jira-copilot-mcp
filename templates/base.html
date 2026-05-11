@@ -21,15 +21,47 @@
       --nav-border-color: #e2e8f0;
       --btn-bg-color: #2563eb;
       --btn-hover-bg-color: #1d4ed8;
+      --card-bg-color: #ffffff;
+      --heading-color: #0f172a;
+      --secondary-text-color: #475569;
+      --meta-text-color: #94a3b8;
+      --link-color: #2563eb;
+      --divider-color: #e2e8f0;
+      --input-bg-color: #ffffff;
+      --input-text-color: #1e293b;
+      --input-border-color: #cbd5e1;
+      --input-focus-border: #2563eb;
+      --input-focus-shadow: rgba(37, 99, 235, 0.12);
+      --comment-bg-color: #f8fafc;
+      --comment-border-color: #e2e8f0;
+      --alert-bg-color: #ffe4e4;
+      --alert-border-color: #cc3333;
+      --alert-text-color: #8b0000;
     }
 
     :root[data-theme="dark"] {
-      --bg-color: #1e293b;
-      --text-color: #f8fafc;
-      --nav-bg-color: #334155;
-      --nav-border-color: #475569;
+      --bg-color: #0f172a;
+      --text-color: #e2e8f0;
+      --nav-bg-color: #1e293b;
+      --nav-border-color: #334155;
       --btn-bg-color: #3b82f6;
       --btn-hover-bg-color: #60a5fa;
+      --card-bg-color: #1e293b;
+      --heading-color: #f1f5f9;
+      --secondary-text-color: #94a3b8;
+      --meta-text-color: #64748b;
+      --link-color: #60a5fa;
+      --divider-color: #334155;
+      --input-bg-color: #0f172a;
+      --input-text-color: #e2e8f0;
+      --input-border-color: #475569;
+      --input-focus-border: #60a5fa;
+      --input-focus-shadow: rgba(96, 165, 250, 0.2);
+      --comment-bg-color: #0f172a;
+      --comment-border-color: #334155;
+      --alert-bg-color: #3d1515;
+      --alert-border-color: #f87171;
+      --alert-text-color: #fca5a5;
     }
 
     /* ── Nav ── */
@@ -83,14 +115,14 @@
 
     /* ── Alert ── */
     .alert {
-      background: #ffe4e4;
-      border-left: 4px solid #cc3333;
+      background: var(--alert-bg-color);
+      border-left: 4px solid var(--alert-border-color);
       padding: 12px 16px;
       margin-bottom: 20px;
       border-radius: 4px;
       font-family: Arial, sans-serif;
       font-size: 0.9rem;
-      color: #8b0000;
+      color: var(--alert-text-color);
     }
 
     /* ── Buttons ── */
@@ -114,7 +146,7 @@
 
     /* ── Card ── */
     .card {
-      background: var(--nav-bg-color);
+      background: var(--card-bg-color);
       border-radius: 8px;
       padding: 28px 32px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.08);
@@ -132,19 +164,21 @@
     .form-group textarea {
       width: 100%;
       padding: 10px 12px;
-      border: 1px solid #cbd5e1;
+      border: 1px solid var(--input-border-color);
       border-radius: 6px;
       font-family: inherit;
       font-size: 0.95rem;
       margin-bottom: 10px;
       box-sizing: border-box;
       transition: border-color 0.2s, box-shadow 0.2s;
+      background: var(--input-bg-color);
+      color: var(--input-text-color);
     }
     .form-group input:focus,
     .form-group textarea:focus {
       outline: none;
-      border-color: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+      border-color: var(--input-focus-border);
+      box-shadow: 0 0 0 3px var(--input-focus-shadow);
     }
     .form-group textarea { resize: vertical; min-height: 80px; }
 
@@ -152,7 +186,7 @@
     .page-title {
       font-size: 2rem;
       font-weight: 700;
-      color: #0f172a;
+      color: var(--heading-color);
       margin-bottom: 20px;
     }
   </style>
