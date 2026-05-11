@@ -48,6 +48,13 @@ ATLASSIAN_REFRESH_TOKEN = os.getenv("ATLASSIAN_REFRESH_TOKEN", "")
 ATLASSIAN_CLOUD_ID      = os.getenv("ATLASSIAN_CLOUD_ID", "").strip("'\"")
 MCP_URL = "https://mcp.atlassian.com/v1/mcp"
 
+# ---------------------------------------------------------------------------
+# Jira REST API (direct fallback when MCP fails)
+# ---------------------------------------------------------------------------
+JIRA_BASE_URL  = os.getenv("JIRA_BASE_URL", "").strip("'\"")
+JIRA_EMAIL     = os.getenv("JIRA_EMAIL", "")
+JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "")
+
 
 # ---------------------------------------------------------------------------
 # ngrok lifespan
@@ -151,8 +158,13 @@ async def github_webhook(
 
     # Extract Jira ticket key from PR title or body (e.g., PROJ-123)
     jira_key = _extract_jira_key(pr_title) or _extract_jira_key(pr_body)
+
+    # If not in PR title/body, check linked GitHub issues for the Jira key
     if not jira_key:
-        logger.warning("[GitHub] No Jira ticket key found in PR #%s title/body — skipping", pr_num)
+        jira_key = _find_jira_key_from_linked_issues(pr_body, pr_num)
+
+    if not jira_key:
+        logger.warning("[GitHub] No Jira ticket key found in PR #%s title/body/linked issues -- skipping", pr_num)
         return {"received": True, "skipped": "no Jira key found"}
 
     logger.info("[GitHub] Found Jira key %s in PR #%s — posting comment", jira_key, pr_num)
@@ -177,6 +189,45 @@ def _github_headers() -> dict[str, str]:
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
+
+
+def _find_jira_key_from_linked_issues(pr_body: str, pr_num: Any) -> str | None:
+    """Search linked GitHub issues for a Jira key marker or Jira key pattern."""
+    # Find issue references like #10, Fixes #10, Closes #10
+    issue_refs = re.findall(r"#(\d+)", pr_body)
+    if not issue_refs:
+        # Also try the PR's linked issues via the timeline/events API
+        try:
+            resp = http_requests.get(
+                f"{GITHUB_API}/repos/{GITHUB_REPO}/pulls/{pr_num}",
+                headers=_github_headers(),
+            )
+            if resp.ok:
+                pr_data = resp.json()
+                body = pr_data.get("body", "") or ""
+                issue_refs = re.findall(r"#(\d+)", body)
+        except Exception:
+            pass
+
+    for issue_num in issue_refs:
+        try:
+            resp = http_requests.get(
+                f"{GITHUB_API}/repos/{GITHUB_REPO}/issues/{issue_num}",
+                headers=_github_headers(),
+            )
+            if not resp.ok:
+                continue
+            issue_data = resp.json()
+            # Check title and body for Jira key
+            title = issue_data.get("title", "")
+            body = issue_data.get("body", "") or ""
+            key = _extract_jira_key(title) or _extract_jira_key(body)
+            if key:
+                logger.info("[GitHub] Found Jira key %s from linked issue #%s", key, issue_num)
+                return key
+        except Exception:
+            continue
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -430,27 +481,23 @@ async def _call_mcp_tool(session: ClientSession, name: str, args: dict[str, Any]
 # Post a comment on Jira when Copilot opens a PR
 # ---------------------------------------------------------------------------
 async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user: str) -> None:
-    try:
-        access_token = _get_atlassian_access_token()
-    except Exception as exc:
-        logger.error("[%s] Failed to get Atlassian access token: %s", jira_key, exc)
-        return
-
-    mcp_headers: dict[str, str] = {"Authorization": f"Bearer {access_token}"}
-    if ATLASSIAN_CLOUD_ID:
-        mcp_headers["X-Atlassian-Cloud-Id"] = ATLASSIAN_CLOUD_ID
-
     comment_body = (
         f"A pull request has been opened by *{pr_user}*:\n\n"
         f"*[{pr_title}|{pr_url}]*\n\n"
         f"PR Link: {pr_url}"
     )
 
+    # Try MCP first
+    mcp_success = False
     try:
+        access_token = _get_atlassian_access_token()
+        mcp_headers: dict[str, str] = {"Authorization": f"Bearer {access_token}"}
+        if ATLASSIAN_CLOUD_ID:
+            mcp_headers["X-Atlassian-Cloud-Id"] = ATLASSIAN_CLOUD_ID
+
         async with streamablehttp_client(MCP_URL, headers=mcp_headers) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-
                 result = await _call_mcp_tool(
                     session,
                     "addCommentToJiraIssue",
@@ -461,9 +508,56 @@ async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user:
                     },
                     jira_key,
                 )
-                logger.info("[%s] Jira comment posted: %s", jira_key, result[:200])
+                if '"error":true' not in result:
+                    logger.info("[%s] Jira comment posted via MCP: %s", jira_key, result[:200])
+                    mcp_success = True
+                else:
+                    logger.warning("[%s] MCP comment failed after retries: %s", jira_key, result[:200])
     except Exception as exc:
-        logger.error("[%s] Failed to post Jira comment via MCP: %s", jira_key, exc)
+        logger.warning("[%s] MCP comment error: %s", jira_key, exc)
+
+    # Fallback: direct Jira REST API
+    if not mcp_success:
+        logger.info("[%s] Falling back to Jira REST API for comment", jira_key)
+        _post_jira_comment_rest(jira_key, comment_body)
+
+
+def _post_jira_comment_rest(jira_key: str, comment_body: str) -> None:
+    """Post a comment using the Jira REST API directly (fallback)."""
+    if not JIRA_BASE_URL or not JIRA_EMAIL or not JIRA_API_TOKEN:
+        logger.error("[%s] Jira REST API credentials not configured -- cannot post comment", jira_key)
+        return
+
+    url = f"{JIRA_BASE_URL}/rest/api/3/issue/{jira_key}/comment"
+    # Jira Cloud REST API v3 expects ADF format
+    adf_body = {
+        "body": {
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": comment_body}
+                    ],
+                }
+            ],
+        }
+    }
+
+    try:
+        resp = http_requests.post(
+            url,
+            json=adf_body,
+            auth=(JIRA_EMAIL, JIRA_API_TOKEN),
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.ok:
+            logger.info("[%s] Jira comment posted via REST API", jira_key)
+        else:
+            logger.error("[%s] Jira REST API comment failed: %s %s -- %s", jira_key, resp.status_code, resp.reason, resp.text[:300])
+    except Exception as exc:
+        logger.error("[%s] Jira REST API error: %s", jira_key, exc)
 
 
 # ---------------------------------------------------------------------------
