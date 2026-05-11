@@ -154,18 +154,19 @@ async def github_webhook(
     pr_body  = pr.get("body", "") or ""
     pr_user  = pr.get("user", {}).get("login", "")
     pr_num   = pr.get("number", "?")
+    pr_branch = pr.get("head", {}).get("ref", "")
 
     logger.info("[GitHub] PR #%s %s by %s: %s", pr_num, "merged" if action == "closed" else action, pr_user, pr_title)
 
-    # Extract Jira ticket key from PR title or body (e.g., PROJ-123)
-    jira_key = _extract_jira_key(pr_title) or _extract_jira_key(pr_body)
+    # Extract Jira ticket key from PR title, body, or branch name (e.g., PROJ-123)
+    jira_key = _extract_jira_key(pr_title) or _extract_jira_key(pr_body) or _extract_jira_key(pr_branch.upper())
 
-    # If not in PR title/body, check linked GitHub issues for the Jira key
+    # If not in PR title/body/branch, check linked GitHub issues for the Jira key
     if not jira_key:
         jira_key = _find_jira_key_from_linked_issues(pr_body, pr_num)
 
     if not jira_key:
-        logger.warning("[GitHub] No Jira ticket key found in PR #%s title/body/linked issues -- skipping", pr_num)
+        logger.warning("[GitHub] No Jira ticket key found in PR #%s title/body/branch/linked issues -- skipping", pr_num)
         return {"received": True, "skipped": "no Jira key found"}
 
     logger.info("[GitHub] Found Jira key %s in PR #%s -- posting comment", jira_key, pr_num)
