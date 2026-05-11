@@ -1,4 +1,4 @@
-import os, json, logging, subprocess, asyncio
+import os, json, logging, re, asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -9,7 +9,6 @@ load_dotenv()
 
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException, Header, BackgroundTasks
-from openai import AsyncOpenAI
 from pyngrok import ngrok, conf
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -20,24 +19,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # ngrok / webhook
 # ---------------------------------------------------------------------------
-NGROK_AUTH_TOKEN   = os.getenv("NGROK_AUTH_TOKEN")
-JIRA_WEBHOOK_SECRET = os.getenv("JIRA_WEBHOOK_SECRET", "")
-APP_PORT           = int(os.getenv("PORT", "8000"))
+NGROK_AUTH_TOKEN     = os.getenv("NGROK_AUTH_TOKEN")
+JIRA_WEBHOOK_SECRET  = os.getenv("JIRA_WEBHOOK_SECRET", "")
+APP_PORT             = int(os.getenv("PORT", "8000"))
 
 # ---------------------------------------------------------------------------
-# GitHub Models - gpt-4o
+# GitHub
 # ---------------------------------------------------------------------------
-GITHUB_TOKEN           = os.getenv("GITHUB_TOKEN", "")
-GITHUB_MODELS_ENDPOINT = "https://models.inference.ai.azure.com"
-MODEL_ID               = "gpt-4o"
-
-# ---------------------------------------------------------------------------
-# Workspace
-# ---------------------------------------------------------------------------
-WORKSPACE_ROOT  = Path(os.getenv("WORKSPACE_ROOT", Path(__file__).parent))
-SKIP_DIRS       = {".git", ".venv", "venv", "__pycache__", "node_modules", ".vscode"}
-SKIP_FILES      = {"jira_webhook.py", "atlassian_auth.py", ".env"}
-MAX_READ_CHARS  = 8000
+GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO   = os.getenv("GITHUB_REPO", "")   # owner/repo, e.g. Shreya-Shetty-163487/jira-copilot-mcp
+GITHUB_API    = "https://api.github.com"
 
 # ---------------------------------------------------------------------------
 # Atlassian OAuth2 (for MCP server auth)
@@ -47,96 +38,6 @@ ATLASSIAN_CLIENT_SECRET = os.getenv("ATLASSIAN_CLIENT_SECRET", "")
 ATLASSIAN_REFRESH_TOKEN = os.getenv("ATLASSIAN_REFRESH_TOKEN", "")
 ATLASSIAN_CLOUD_ID      = os.getenv("ATLASSIAN_CLOUD_ID", "")
 MCP_URL = "https://mcp.atlassian.com/v1/mcp"
-
-# ---------------------------------------------------------------------------
-# Local tool definitions (file access + git - not in Atlassian MCP)
-# ---------------------------------------------------------------------------
-LOCAL_TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "list_files",
-            "description": "List all files in the workspace. Use this first to discover what exists before reading.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subdir": {"type": "string", "description": "Optional subdirectory to list. Leave empty for root."},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read the full content of a specific workspace file.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Workspace-relative path, e.g. app.py or templates/index.html"},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_files",
-            "description": (
-                "Write code changes to disk. Provide every file that must be "
-                "created or modified with its FULL content (not a diff)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "files": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "path":    {"type": "string", "description": "Workspace-relative path, e.g. app.py"},
-                                "content": {"type": "string", "description": "Full file content"},
-                            },
-                            "required": ["path", "content"],
-                        },
-                    },
-                    "summary": {"type": "string", "description": "One-sentence summary of all changes"},
-                },
-                "required": ["files", "summary"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_git_branch",
-            "description": "Create a new git branch from current HEAD and push it to remote origin.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "branch_name": {"type": "string", "description": "e.g. feature/TA-14-add-login"},
-                },
-                "required": ["branch_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "commit_and_push",
-            "description": "Stage all modified files, create a git commit, and push to the current remote branch.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string", "description": "Git commit message"},
-                },
-                "required": ["message"],
-            },
-        },
-    },
-]
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +52,9 @@ async def lifespan(app: FastAPI):
     if public_url.startswith("http://"):
         public_url = public_url.replace("http://", "https://", 1)
     logger.info("=" * 60)
-    logger.info("ngrok public URL : %s", public_url)
-    logger.info("Jira webhook URL : %s/jira/webhook", public_url)
+    logger.info("ngrok public URL   : %s", public_url)
+    logger.info("Jira webhook URL   : %s/jira/webhook", public_url)
+    logger.info("GitHub webhook URL : %s/github/webhook", public_url)
     logger.info("=" * 60)
     yield
     logger.info("Shutting down ngrok tunnel...")
@@ -172,7 +74,7 @@ async def health() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Jira webhook endpoint
+# Jira webhook → create GitHub Issue assigned to @copilot
 # ---------------------------------------------------------------------------
 @app.post("/jira/webhook")
 async def jira_webhook(
@@ -197,13 +99,11 @@ async def jira_webhook(
     issue = payload.get("issue", {})
     key   = issue.get("key", "?")
 
-    if event == "jira:issue_created":
-        logger.info("[CREATED] %s - %s", key, issue.get("fields", {}).get("summary", ""))
-        background_tasks.add_task(_run_agentic_loop, key)
-    elif event == "jira:issue_updated":
-        changed = [i.get("field") for i in payload.get("changelog", {}).get("items", [])]
-        logger.info("[UPDATED] %s - changed fields: %s", key, changed)
-        background_tasks.add_task(_run_agentic_loop, key)
+    if event in ("jira:issue_created", "jira:issue_updated"):
+        summary = issue.get("fields", {}).get("summary", "")
+        description = issue.get("fields", {}).get("description", "") or ""
+        logger.info("[%s] %s - %s", "CREATED" if "created" in event else "UPDATED", key, summary)
+        background_tasks.add_task(_create_github_issue, key, summary, description)
     elif event == "jira:issue_deleted":
         logger.info("[DELETED] %s", key)
     else:
@@ -213,36 +113,98 @@ async def jira_webhook(
 
 
 # ---------------------------------------------------------------------------
-# Workspace helpers (used by list_files / read_file tools)
+# GitHub webhook → PR opened by Copilot → post Jira comment
 # ---------------------------------------------------------------------------
-def _tool_list_files(subdir: str = "") -> str:
-    base = (WORKSPACE_ROOT / subdir) if subdir else WORKSPACE_ROOT
-    files: list[str] = []
-    for path in sorted(base.rglob("*")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(WORKSPACE_ROOT)
-        if any(p in SKIP_DIRS for p in relative.parts):
-            continue
-        if path.name in SKIP_FILES:
-            continue
-        files.append(relative.as_posix())
-    return json.dumps({"files": files})
+@app.post("/github/webhook")
+async def github_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = await request.json()
+    action = payload.get("action", "")
+
+    # We only care about pull_request events with action "opened"
+    pr = payload.get("pull_request")
+    if not pr:
+        return {"received": True, "skipped": "not a pull_request event"}
+
+    if action != "opened":
+        logger.info("[GitHub] PR action=%s — ignoring (only handle 'opened')", action)
+        return {"received": True, "skipped": f"action={action}"}
+
+    pr_url   = pr.get("html_url", "")
+    pr_title = pr.get("title", "")
+    pr_body  = pr.get("body", "") or ""
+    pr_user  = pr.get("user", {}).get("login", "")
+    pr_num   = pr.get("number", "?")
+
+    logger.info("[GitHub] PR #%s opened by %s: %s", pr_num, pr_user, pr_title)
+
+    # Extract Jira ticket key from PR title or body (e.g., PROJ-123)
+    jira_key = _extract_jira_key(pr_title) or _extract_jira_key(pr_body)
+    if not jira_key:
+        logger.warning("[GitHub] No Jira ticket key found in PR #%s title/body — skipping", pr_num)
+        return {"received": True, "skipped": "no Jira key found"}
+
+    logger.info("[GitHub] Found Jira key %s in PR #%s — posting comment", jira_key, pr_num)
+    background_tasks.add_task(_post_jira_comment, jira_key, pr_url, pr_title, pr_user)
+
+    return {"received": True, "jira_key": jira_key, "pr": pr_num}
 
 
-def _tool_read_file(rel_path: str) -> str:
-    path = WORKSPACE_ROOT / rel_path.strip()
-    if path.name in SKIP_FILES:
-        return json.dumps({"error": f"Access to {path.name} is not permitted."})
-    if not path.is_file():
-        return json.dumps({"error": f"File not found: {rel_path}"})
-    try:
-        content = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError as exc:
-        return json.dumps({"error": str(exc)})
-    if len(content) > MAX_READ_CHARS:
-        content = content[:MAX_READ_CHARS] + "\n... [truncated — file too large]"
-    return json.dumps({"path": rel_path, "content": content})
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+_JIRA_KEY_RE = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
+
+
+def _extract_jira_key(text: str) -> str | None:
+    m = _JIRA_KEY_RE.search(text)
+    return m.group(1) if m else None
+
+
+def _github_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Create a GitHub Issue assigned to Copilot Coding Agent
+# ---------------------------------------------------------------------------
+async def _create_github_issue(ticket_key: str, summary: str, description: str) -> None:
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        logger.warning("[%s] GITHUB_TOKEN or GITHUB_REPO not set — skipping", ticket_key)
+        return
+
+    title = f"[{ticket_key}] {summary}"
+    body = (
+        f"**Jira Ticket:** {ticket_key}\n\n"
+        f"**Description:**\n{description}\n\n"
+        f"---\n"
+        f"_Auto-created from Jira webhook. Assigned to Copilot Coding Agent._"
+    )
+
+    resp = http_requests.post(
+        f"{GITHUB_API}/repos/{GITHUB_REPO}/issues",
+        headers=_github_headers(),
+        json={"title": title, "body": body},
+    )
+
+    if not resp.ok:
+        logger.error(
+            "[%s] Failed to create GitHub Issue: %s %s — %s",
+            ticket_key, resp.status_code, resp.reason, resp.text[:300],
+        )
+        return
+
+    issue_data = resp.json()
+    issue_number = issue_data.get("number")
+    logger.info(
+        "[%s] GitHub Issue #%s created: %s",
+        ticket_key, issue_number, issue_data.get("html_url"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +235,6 @@ def _get_atlassian_access_token() -> str:
     if not access_token:
         raise RuntimeError(f"No access_token in Atlassian token response: {data}")
 
-    # Atlassian issues a new refresh token on each exchange (single-use rotation).
-    # Persist the new one so the next request doesn't fail with "invalid refresh_token".
     new_refresh = data.get("refresh_token", "")
     if new_refresh and new_refresh != ATLASSIAN_REFRESH_TOKEN:
         ATLASSIAN_REFRESH_TOKEN = new_refresh
@@ -303,26 +263,14 @@ def _update_env_file(key: str, value: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# MCP helper
+# MCP helper — call Atlassian MCP tool with retry
 # ---------------------------------------------------------------------------
-def _mcp_tool_to_openai(tool: Any) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name":        tool.name,
-            "description": tool.description or "",
-            "parameters":  tool.inputSchema,
-        },
-    }
-
-
 async def _call_mcp_tool(session: ClientSession, name: str, args: dict[str, Any], ticket_key: str) -> str:
     last_error = ""
     for attempt in range(1, 4):
         result = await session.call_tool(name, arguments=args)
         text_parts = [c.text for c in result.content if hasattr(c, "text")]
         text = "\n".join(text_parts) if text_parts else json.dumps({"result": "ok"})
-        # Check for transient Atlassian errors and retry
         if '"error":true' in text and "try again" in text.lower() and attempt < 3:
             logger.warning("[%s] MCP tool %s transient error (attempt %d/3), retrying...", ticket_key, name, attempt)
             await asyncio.sleep(2 * attempt)
@@ -333,166 +281,43 @@ async def _call_mcp_tool(session: ClientSession, name: str, args: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
-# Local tool executors (git + file writing)
+# Post a comment on Jira when Copilot opens a PR
 # ---------------------------------------------------------------------------
-def _tool_write_files(files: list[dict[str, str]], summary: str, ticket_key: str) -> str:
-    written: list[str] = []
-    for f in files:
-        rel_path = f.get("path", "").strip()
-        content  = f.get("content", "")
-        if not rel_path:
-            continue
-        target = WORKSPACE_ROOT / rel_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-        written.append(rel_path)
-        logger.info("[%s] Written: %s", ticket_key, rel_path)
-    logger.info("[%s] write_files summary: %s", ticket_key, summary)
-    return json.dumps({"written": written, "summary": summary})
-
-
-def _tool_create_git_branch(branch_name: str) -> str:
-    try:
-        subprocess.run(["git", "checkout", "-b", branch_name], cwd=WORKSPACE_ROOT, check=True, capture_output=True)
-        push = subprocess.run(["git", "push", "-u", "origin", branch_name], cwd=WORKSPACE_ROOT, capture_output=True, text=True)
-        pushed = push.returncode == 0
-        return json.dumps({"branch": branch_name, "pushed": pushed, "note": push.stderr.strip() if not pushed else ""})
-    except subprocess.CalledProcessError as exc:
-        return json.dumps({"error": exc.stderr.decode() if exc.stderr else str(exc)})
-
-
-def _tool_commit_and_push(message: str) -> str:
-    try:
-        subprocess.run(["git", "add", "-A"], cwd=WORKSPACE_ROOT, check=True, capture_output=True)
-        commit = subprocess.run(["git", "commit", "-m", message], cwd=WORKSPACE_ROOT, capture_output=True, text=True)
-        if commit.returncode != 0:
-            return json.dumps({"error": commit.stderr.strip() or commit.stdout.strip()})
-        push = subprocess.run(["git", "push"], cwd=WORKSPACE_ROOT, capture_output=True, text=True)
-        pushed = push.returncode == 0
-        return json.dumps({"committed": True, "pushed": pushed, "note": push.stderr.strip() if not pushed else ""})
-    except subprocess.CalledProcessError as exc:
-        return json.dumps({"error": exc.stderr.decode() if exc.stderr else str(exc)})
-
-
-def _execute_local_tool(name: str, args: dict[str, Any], ticket_key: str) -> str:
-    logger.info("[%s] -> Local tool: %s(%s)", ticket_key, name, list(args.keys()))
-    if name == "list_files":
-        result = _tool_list_files(args.get("subdir", ""))
-    elif name == "read_file":
-        result = _tool_read_file(args["path"])
-    elif name == "write_files":
-        result = _tool_write_files(args["files"], args.get("summary", ""), ticket_key)
-    elif name == "create_git_branch":
-        result = _tool_create_git_branch(args["branch_name"])
-    elif name == "commit_and_push":
-        result = _tool_commit_and_push(args["message"])
-    else:
-        result = json.dumps({"error": f"Unknown local tool: {name}"})
-    logger.info("[%s] Local tool result: %s", ticket_key, result[:150].replace("\n", " "))
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Agentic loop (async - runs in FastAPI background task)
-# ---------------------------------------------------------------------------
-async def _run_agentic_loop(ticket_key: str) -> None:
-    if not GITHUB_TOKEN:
-        logger.warning("[%s] GITHUB_TOKEN not set - skipping. Set it in .env", ticket_key)
-        return
-
-    logger.info("[%s] Fetching Atlassian OAuth access token...", ticket_key)
+async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user: str) -> None:
     try:
         access_token = _get_atlassian_access_token()
     except Exception as exc:
-        logger.error("[%s] Failed to get Atlassian access token: %s", ticket_key, exc)
+        logger.error("[%s] Failed to get Atlassian access token: %s", jira_key, exc)
         return
 
     mcp_headers: dict[str, str] = {"Authorization": f"Bearer {access_token}"}
     if ATLASSIAN_CLOUD_ID:
         mcp_headers["X-Atlassian-Cloud-Id"] = ATLASSIAN_CLOUD_ID
 
-    async with streamablehttp_client(MCP_URL, headers=mcp_headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
+    comment_body = (
+        f"A pull request has been opened by *{pr_user}*:\n\n"
+        f"*[{pr_title}|{pr_url}]*\n\n"
+        f"PR Link: {pr_url}"
+    )
 
-            list_result = await session.list_tools()
-            mcp_tool_names = {t.name for t in list_result.tools}
-            mcp_tools_openai = [_mcp_tool_to_openai(t) for t in list_result.tools]
-            logger.info("[%s] Atlassian MCP tools loaded: %d tools", ticket_key, len(mcp_tool_names))
-            logger.info("[%s] Tools: %s", ticket_key, sorted(mcp_tool_names))
+    try:
+        async with streamablehttp_client(MCP_URL, headers=mcp_headers) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
 
-            all_tools = LOCAL_TOOLS + mcp_tools_openai
-
-            cloud_id = ATLASSIAN_CLOUD_ID
-            system_prompt = (
-                "You are an expert software engineer working autonomously on a software project.\n\n"
-                "You have tools to read the codebase on demand — use them only when needed, not all at once.\n\n"
-                "IMPORTANT: Never call search, getAccessibleAtlassianResources, or any discovery tools.\n"
-                "You already know the Jira ticket key and cloud ID. Use them directly.\n\n"
-                f"Jira ticket key : {ticket_key}\n"
-                f"Atlassian cloudId: {cloud_id}\n\n"
-                "Your workflow for every Jira ticket:\n"
-                f"1. Call getJiraIssue with issueIdOrKey=\"{ticket_key}\" and cloudId=\"{cloud_id}\".\n"
-                "2. Call list_files to see what exists in the workspace.\n"
-                "3. Call read_file on only the specific files relevant to the ticket requirements.\n"
-                "4. Implement all required changes by calling write_files with the FULL content of every file to create or modify.\n"
-                f"5. Call create_git_branch with a branch name: feature/{ticket_key.lower()}-{{short-slug}}.\n"
-                "6. Call commit_and_push with a clear commit message referencing the ticket key.\n"
-                f"7. Call addCommentToJiraIssue with issueIdOrKey=\"{ticket_key}\", cloudId=\"{cloud_id}\", and a comment body containing:\n"
-                "   - Summary of all changes implemented\n"
-                "   - List of files created/modified\n"
-                "   - The exact branch name\n"
-                "   - Any important implementation notes\n"
-            )
-
-            client = AsyncOpenAI(base_url=GITHUB_MODELS_ENDPOINT, api_key=GITHUB_TOKEN)
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Implement the changes required by Jira ticket {ticket_key}."},
-            ]
-
-            logger.info("[%s] Starting agentic loop - model: %s", ticket_key, MODEL_ID)
-
-            for round_num in range(1, 15):
-                logger.info("[%s] Round %d - calling model...", ticket_key, round_num)
-
-                response = await client.chat.completions.create(
-                    model=MODEL_ID,
-                    messages=messages,
-                    tools=all_tools,
-                    tool_choice="auto",
-                    temperature=0.1,
+                result = await _call_mcp_tool(
+                    session,
+                    "addCommentToJiraIssue",
+                    {
+                        "issueIdOrKey": jira_key,
+                        "cloudId": ATLASSIAN_CLOUD_ID,
+                        "body": comment_body,
+                    },
+                    jira_key,
                 )
-
-                usage = response.usage
-                if usage:
-                    logger.info(
-                        "[%s] Tokens - prompt: %d, completion: %d, total: %d",
-                        ticket_key, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
-                    )
-
-                choice = response.choices[0]
-                messages.append(choice.message.model_dump(exclude_unset=True))
-
-                if not choice.message.tool_calls:
-                    logger.info("[%s] Agentic loop complete.", ticket_key)
-                    if choice.message.content:
-                        logger.info("[%s] Final: %s", ticket_key, choice.message.content[:300])
-                    break
-
-                for tc in choice.message.tool_calls:
-                    args = json.loads(tc.function.arguments)
-                    logger.info("[%s] -> Tool call: %s(%s)", ticket_key, tc.function.name, list(args.keys()))
-
-                    if tc.function.name in mcp_tool_names:
-                        result = await _call_mcp_tool(session, tc.function.name, args, ticket_key)
-                    else:
-                        result = _execute_local_tool(tc.function.name, args, ticket_key)
-
-                    logger.info("[%s] Tool result: %s", ticket_key, result[:150].replace("\n", " "))
-                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-            else:
-                logger.warning("[%s] Reached max rounds (14) without finishing.", ticket_key)
+                logger.info("[%s] Jira comment posted: %s", jira_key, result[:200])
+    except Exception as exc:
+        logger.error("[%s] Failed to post Jira comment via MCP: %s", jira_key, exc)
 
 
 # ---------------------------------------------------------------------------
