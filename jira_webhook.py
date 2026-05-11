@@ -45,7 +45,7 @@ QUALITY_PASS_SCORE     = 6
 ATLASSIAN_CLIENT_ID     = os.getenv("ATLASSIAN_CLIENT_ID", "")
 ATLASSIAN_CLIENT_SECRET = os.getenv("ATLASSIAN_CLIENT_SECRET", "")
 ATLASSIAN_REFRESH_TOKEN = os.getenv("ATLASSIAN_REFRESH_TOKEN", "")
-ATLASSIAN_CLOUD_ID      = os.getenv("ATLASSIAN_CLOUD_ID", "")
+ATLASSIAN_CLOUD_ID      = os.getenv("ATLASSIAN_CLOUD_ID", "").strip("'\"")
 MCP_URL = "https://mcp.atlassian.com/v1/mcp"
 
 
@@ -137,8 +137,8 @@ async def github_webhook(
     if not pr:
         return {"received": True, "skipped": "not a pull_request event"}
 
-    if action != "opened":
-        logger.info("[GitHub] PR action=%s — ignoring (only handle 'opened')", action)
+    if action not in ("opened", "ready_for_review"):
+        logger.info("[GitHub] PR action=%s \u2014 ignoring (only handle 'opened'/'ready_for_review')", action)
         return {"received": True, "skipped": f"action={action}"}
 
     pr_url   = pr.get("html_url", "")
@@ -457,7 +457,7 @@ async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user:
                     {
                         "issueIdOrKey": jira_key,
                         "cloudId": ATLASSIAN_CLOUD_ID,
-                        "body": comment_body,
+                        "commentBody": comment_body,
                     },
                     jira_key,
                 )
