@@ -1,0 +1,20 @@
+{
+  "posts": [
+    {
+      "id": "7409c60d-7765-4ca4-995e-f198beaa412e",
+      "title": "abc",
+      "author": "shreya",
+      "content": "this is a random blog",
+      "created_at": "2026-05-08 05:41:32",
+      "updated_at": null,
+      "comments": [
+        {
+          "id": "63aa86fa-cfe7-4f5e-91fc-2471404566a8",
+          "author": "sia",
+          "body": "\u2728\u2728",
+          "created_at": "2026-05-10 18:45:46"
+        }
+      ]
+    }
+  ]
+}

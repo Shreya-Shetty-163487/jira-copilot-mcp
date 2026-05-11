@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}All Posts – The Blog{% endblock %}
+
+{% block content %}
+<style>
+  .post-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 24px;
+  }
+
+  .post-card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 24px 24px 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+    display: flex;
+    flex-direction: column;
+    transition: box-shadow 0.2s, transform 0.15s;
+  }
+  .post-card:hover {
+    box-shadow: 0 6px 20px rgba(37,99,235,0.12), 0 0 0 1px rgba(37,99,235,0.1);
+    transform: translateY(-2px);
+  }
+
+  .post-card h2 {
+    font-size: 1.2rem;
+    margin-bottom: 8px;
+    line-height: 1.35;
+  }
+  .post-card h2 a {
+    text-decoration: none;
+    color: #0f172a;
+  }
+  .post-card h2 a:hover { color: #2563eb; }
+
+  .meta {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    margin-bottom: 12px;
+  }
+
+  .excerpt {
+    font-size: 0.92rem;
+    color: #475569;
+    line-height: 1.6;
+    flex: 1;
+  }
+
+  .read-more {
+    display: inline-block;
+    margin-top: 16px;
+    font-size: 0.85rem;
+    color: #2563eb;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .read-more:hover { text-decoration: underline; }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #94a3b8;
+  }
+  .empty-state p { margin-bottom: 20px; font-size: 1.1rem; }
+</style>
+
+<h1 class="page-title">Latest Posts</h1>
+
+{% if posts %}
+  <div class="post-grid">
+    {% for post in posts %}
+    <div class="post-card">
+      <h2><a href="{{ url_for('view_post', post_id=post.id) }}">{{ post.title }}</a></h2>
+      <div class="meta">
+        By <strong>{{ post.author }}</strong> &bull; {{ post.created_at }}
+        {% if post.updated_at %} &bull; <em>edited {{ post.updated_at }}</em>{% endif %}
+      </div>
+      <p class="excerpt">{{ post.content[:200] }}{% if post.content|length > 200 %}…{% endif %}</p>
+      <a class="read-more" href="{{ url_for('view_post', post_id=post.id) }}">Read more &rarr;</a>
+    </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty-state">
+    <p>No posts yet. Be the first to write one!</p>
+    <a class="btn btn-primary" href="{{ url_for('create_post') }}">+ Write a Post</a>
+  </div>
+{% endif %}
+{% endblock %}

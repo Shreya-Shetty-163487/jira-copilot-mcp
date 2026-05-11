@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}{{ post.title }} – The Blog{% endblock %}
+
+{% block content %}
+<style>
+  .back-link {
+    display: inline-block;
+    margin-bottom: 20px;
+    font-size: 0.85rem;
+    color: #2563eb;
+    text-decoration: none;
+  }
+  .back-link:hover { text-decoration: underline; }
+
+  .post-header { margin-bottom: 24px; }
+  .post-header h1 { font-size: 2.2rem; color: #0f172a; margin-bottom: 10px; }
+
+  .meta {
+    font-size: 0.85rem;
+    color: #94a3b8;
+  }
+
+  .divider {
+    border: none;
+    border-top: 1px solid #e2e8f0;
+    margin: 24px 0;
+  }
+
+  .post-body {
+    font-size: 1.08rem;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 32px;
+    flex-wrap: wrap;
+  }
+
+  .delete-form { display: inline; }
+
+  /* Comments */
+  .comments-section { margin-top: 40px; }
+  .comments-section h2 { font-size: 1.4rem; color: #0f172a; margin-bottom: 16px; }
+
+  .comment-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+  }
+  .comment-card .comment-meta {
+    font-size: 0.82rem;
+    color: #94a3b8;
+    margin-bottom: 6px;
+  }
+  .comment-card .comment-body { font-size: 1rem; line-height: 1.6; white-space: pre-wrap; }
+
+  .no-comments { color: #94a3b8; font-style: italic; margin-bottom: 16px; }
+
+  .comment-form { margin-top: 20px; }
+  .comment-form h3 { font-size: 1.1rem; margin-bottom: 12px; color: #0f172a; }
+  .comment-form input,
+  .comment-form textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    margin-bottom: 10px;
+    box-sizing: border-box;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .comment-form input:focus,
+  .comment-form textarea:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+  }
+  .comment-form textarea { resize: vertical; min-height: 80px; }
+</style>
+
+<a class="back-link" href="{{ url_for('index') }}">&larr; Back to all posts</a>
+
+<div class="card">
+  <div class="post-header">
+    <h1>{{ post.title }}</h1>
+    <div class="meta">
+      By <strong>{{ post.author }}</strong> &bull; {{ post.created_at }}
+      {% if post.updated_at %} &bull; <em>last edited {{ post.updated_at }}</em>{% endif %}
+    </div>
+  </div>
+
+  <hr class="divider" />
+
+  <div class="post-body">{{ post.content }}</div>
+
+  <div class="actions">
+    <a class="btn btn-edit" href="{{ url_for('edit_post', post_id=post.id) }}">Edit Post</a>
+
+    <form class="delete-form" method="POST" action="{{ url_for('delete_post', post_id=post.id) }}"
+          onsubmit="return confirm('Delete this post? This cannot be undone.');">
+      <button class="btn btn-delete" type="submit">Delete Post</button>
+    </form>
+  </div>
+</div>
+
+<div class="card comments-section">
+  <h2>Comments</h2>
+
+  {% if post.comments %}
+    {% for comment in post.comments %}
+    <div class="comment-card">
+      <div class="comment-meta">
+        <strong>{{ comment.author }}</strong> &bull; {{ comment.created_at }}
+      </div>
+      <div class="comment-body">{{ comment.body }}</div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="no-comments">No comments yet.</p>
+  {% endif %}
+
+  <div class="comment-form">
+    <h3>Leave a comment</h3>
+    <form method="POST" action="{{ url_for('add_comment', post_id=post.id) }}">
+      <input type="text" name="author" placeholder="Your name" required maxlength="100" />
+      <textarea name="body" placeholder="Write your comment…" required maxlength="2000"></textarea>
+      <button class="btn btn-edit" type="submit">Post Comment</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
