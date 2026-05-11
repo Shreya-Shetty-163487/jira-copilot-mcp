@@ -4,6 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}The Blog{% endblock %}</title>
+  <script>
+    try {
+      const savedTheme = localStorage.getItem("theme");
+      if (savedTheme === "light" || savedTheme === "dark") {
+        document.documentElement.setAttribute("data-theme", savedTheme);
+      }
+    } catch (e) {}
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -59,6 +67,25 @@
       font-weight: 600;
     }
     nav a.btn-nav:hover { background: var(--btn-hover-bg-color); }
+    nav .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .theme-toggle {
+      width: 40px;
+      height: 40px;
+      border: 1px solid var(--nav-border-color);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text-color);
+      font-size: 1.1rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .theme-toggle:hover { background: rgba(148, 163, 184, 0.15); }
 
     /* ── Main container ── */
     .container {
@@ -146,9 +173,35 @@
 <body>
   <nav>
     <a href="{{ url_for('index') }}" class="brand">The Blog</a>
+    <div class="nav-actions">
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle theme">🌙</button>
+    </div>
   </nav>
   <div class="container">
     {% block content %}{% endblock %}
   </div>
+  <script>
+    const themeToggleBtn = document.getElementById("theme-toggle");
+    const root = document.documentElement;
+
+    function setTheme(theme) {
+      root.setAttribute("data-theme", theme);
+      themeToggleBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+      themeToggleBtn.setAttribute(
+        "aria-label",
+        theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+      );
+      try {
+        localStorage.setItem("theme", theme);
+      } catch (e) {}
+    }
+
+    setTheme(root.getAttribute("data-theme") || "light");
+
+    themeToggleBtn.addEventListener("click", function () {
+      const nextTheme = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+      setTheme(nextTheme);
+    });
+  </script>
 </body>
 </html>
