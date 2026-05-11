@@ -60,6 +60,20 @@
     }
     nav a.btn-nav:hover { background: var(--btn-hover-bg-color); }
 
+    /* ── Theme toggle icon ── */
+    #theme-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 1.5rem;
+      line-height: 1;
+      padding: 4px;
+      border-radius: 50%;
+      transition: transform 0.2s;
+      color: var(--text-color);
+    }
+    #theme-toggle:hover { transform: scale(1.15); }
+
     /* ── Main container ── */
     .container {
       max-width: 860px;
@@ -146,9 +160,34 @@
 <body>
   <nav>
     <a href="{{ url_for('index') }}" class="brand">The Blog</a>
+    <button id="theme-toggle" aria-label="Toggle light/dark mode" title="Toggle light/dark mode">🌙</button>
   </nav>
   <div class="container">
     {% block content %}{% endblock %}
   </div>
+  <script>
+    (function () {
+      var btn = document.getElementById('theme-toggle');
+      var html = document.documentElement;
+
+      function applyTheme(theme) {
+        html.setAttribute('data-theme', theme);
+        btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+        var label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+      }
+
+      // Restore saved preference on load
+      var saved = localStorage.getItem('theme') || 'light';
+      applyTheme(saved);
+
+      btn.addEventListener('click', function () {
+        var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        localStorage.setItem('theme', next);
+        applyTheme(next);
+      });
+    })();
+  </script>
 </body>
 </html>
