@@ -48,13 +48,6 @@ ATLASSIAN_REFRESH_TOKEN = os.getenv("ATLASSIAN_REFRESH_TOKEN", "")
 ATLASSIAN_CLOUD_ID      = os.getenv("ATLASSIAN_CLOUD_ID", "").strip("'\"")
 MCP_URL = "https://mcp.atlassian.com/v1/mcp"
 
-# ---------------------------------------------------------------------------
-# Jira REST API (direct fallback when MCP fails)
-# ---------------------------------------------------------------------------
-JIRA_BASE_URL  = os.getenv("JIRA_BASE_URL", "").strip("'\"")
-JIRA_EMAIL     = os.getenv("JIRA_EMAIL", "")
-JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN", "")
-
 
 # ---------------------------------------------------------------------------
 # ngrok lifespan
@@ -464,13 +457,13 @@ def _update_env_file(key: str, value: str) -> None:
 # ---------------------------------------------------------------------------
 async def _call_mcp_tool(session: ClientSession, name: str, args: dict[str, Any], ticket_key: str) -> str:
     last_error = ""
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
         result = await session.call_tool(name, arguments=args)
         text_parts = [c.text for c in result.content if hasattr(c, "text")]
         text = "\n".join(text_parts) if text_parts else json.dumps({"result": "ok"})
-        if '"error":true' in text and "try again" in text.lower() and attempt < 3:
-            logger.warning("[%s] MCP tool %s transient error (attempt %d/3), retrying...", ticket_key, name, attempt)
-            await asyncio.sleep(2 * attempt)
+        if '"error":true' in text and "try again" in text.lower() and attempt < 5:
+            logger.warning("[%s] MCP tool %s transient error (attempt %d/5), retrying...", ticket_key, name, attempt)
+            await asyncio.sleep(3 * attempt)
             last_error = text
             continue
         return text
@@ -487,8 +480,6 @@ async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user:
         f"PR Link: {pr_url}"
     )
 
-    # Try MCP first
-    mcp_success = False
     try:
         access_token = _get_atlassian_access_token()
         mcp_headers: dict[str, str] = {"Authorization": f"Bearer {access_token}"}
@@ -508,56 +499,9 @@ async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user:
                     },
                     jira_key,
                 )
-                if '"error":true' not in result:
-                    logger.info("[%s] Jira comment posted via MCP: %s", jira_key, result[:200])
-                    mcp_success = True
-                else:
-                    logger.warning("[%s] MCP comment failed after retries: %s", jira_key, result[:200])
+                logger.info("[%s] Jira comment result: %s", jira_key, result[:200])
     except Exception as exc:
-        logger.warning("[%s] MCP comment error: %s", jira_key, exc)
-
-    # Fallback: direct Jira REST API
-    if not mcp_success:
-        logger.info("[%s] Falling back to Jira REST API for comment", jira_key)
-        _post_jira_comment_rest(jira_key, comment_body)
-
-
-def _post_jira_comment_rest(jira_key: str, comment_body: str) -> None:
-    """Post a comment using the Jira REST API directly (fallback)."""
-    if not JIRA_BASE_URL or not JIRA_EMAIL or not JIRA_API_TOKEN:
-        logger.error("[%s] Jira REST API credentials not configured -- cannot post comment", jira_key)
-        return
-
-    url = f"{JIRA_BASE_URL}/rest/api/3/issue/{jira_key}/comment"
-    # Jira Cloud REST API v3 expects ADF format
-    adf_body = {
-        "body": {
-            "version": 1,
-            "type": "doc",
-            "content": [
-                {
-                    "type": "paragraph",
-                    "content": [
-                        {"type": "text", "text": comment_body}
-                    ],
-                }
-            ],
-        }
-    }
-
-    try:
-        resp = http_requests.post(
-            url,
-            json=adf_body,
-            auth=(JIRA_EMAIL, JIRA_API_TOKEN),
-            headers={"Content-Type": "application/json"},
-        )
-        if resp.ok:
-            logger.info("[%s] Jira comment posted via REST API", jira_key)
-        else:
-            logger.error("[%s] Jira REST API comment failed: %s %s -- %s", jira_key, resp.status_code, resp.reason, resp.text[:300])
-    except Exception as exc:
-        logger.error("[%s] Jira REST API error: %s", jira_key, exc)
+        logger.error("[%s] Failed to post Jira comment via MCP: %s", jira_key, exc)
 
 
 # ---------------------------------------------------------------------------
