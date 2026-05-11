@@ -1,6 +1,5 @@
-import os, json, logging, re, asyncio
+import os, json, logging, re, asyncio, base64
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import requests as http_requests
@@ -43,13 +42,12 @@ GITHUB_MODELS_MODEL    = "gpt-4o"
 QUALITY_PASS_SCORE     = 6
 
 # ---------------------------------------------------------------------------
-# Atlassian OAuth2 (for MCP server auth)
+# Atlassian MCP (Basic auth via API token)
 # ---------------------------------------------------------------------------
-ATLASSIAN_CLIENT_ID     = os.getenv("ATLASSIAN_CLIENT_ID", "")
-ATLASSIAN_CLIENT_SECRET = os.getenv("ATLASSIAN_CLIENT_SECRET", "")
-ATLASSIAN_REFRESH_TOKEN = os.getenv("ATLASSIAN_REFRESH_TOKEN", "")
-ATLASSIAN_CLOUD_ID      = os.getenv("ATLASSIAN_CLOUD_ID", "").strip("'\"")
-MCP_URL = "https://mcp.atlassian.com/v1/mcp"
+JIRA_EMAIL         = os.getenv("JIRA_EMAIL", "")
+MCP_API_TOKEN      = os.getenv("MCP_API_TOKEN", "")
+ATLASSIAN_CLOUD_ID = os.getenv("ATLASSIAN_CLOUD_ID", "").strip("'\"")
+MCP_URL = "https://mcp.atlassian.com/v1/mcp/authv2"
 
 
 # ---------------------------------------------------------------------------
@@ -415,58 +413,12 @@ def _assign_copilot(ticket_key: str, issue_number: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Atlassian OAuth2 - exchange refresh token for access token
+# Atlassian MCP auth helper
 # ---------------------------------------------------------------------------
-def _get_atlassian_access_token() -> str:
-    global ATLASSIAN_REFRESH_TOKEN
-    if not ATLASSIAN_REFRESH_TOKEN:
-        raise RuntimeError(
-            "ATLASSIAN_REFRESH_TOKEN not set in .env. "
-            "Run python atlassian_auth.py to complete the OAuth flow."
-        )
-    resp = http_requests.post(
-        "https://auth.atlassian.com/oauth/token",
-        json={
-            "grant_type":    "refresh_token",
-            "client_id":     ATLASSIAN_CLIENT_ID,
-            "client_secret": ATLASSIAN_CLIENT_SECRET,
-            "refresh_token": ATLASSIAN_REFRESH_TOKEN,
-        },
-    )
-    if not resp.ok:
-        raise RuntimeError(
-            f"{resp.status_code} {resp.reason} — {resp.text}"
-        )
-    data = resp.json()
-    access_token = data.get("access_token", "")
-    if not access_token:
-        raise RuntimeError(f"No access_token in Atlassian token response: {data}")
-
-    new_refresh = data.get("refresh_token", "")
-    if new_refresh and new_refresh != ATLASSIAN_REFRESH_TOKEN:
-        ATLASSIAN_REFRESH_TOKEN = new_refresh
-        _update_env_file("ATLASSIAN_REFRESH_TOKEN", new_refresh)
-        logger.info("[OAuth] Refresh token rotated and saved to .env.")
-
-    logger.info("[OAuth] Access token refreshed successfully.")
-    return access_token
-
-
-def _update_env_file(key: str, value: str) -> None:
-    env_path = Path(__file__).parent / ".env"
-    try:
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-        updated = False
-        for i, line in enumerate(lines):
-            if line.startswith(f"{key}=") or line.startswith(f"{key} ="):
-                lines[i] = f"{key}={value}"
-                updated = True
-                break
-        if not updated:
-            lines.append(f"{key}={value}")
-        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    except OSError as exc:
-        logger.warning("[OAuth] Could not update .env: %s", exc)
+def _mcp_auth_headers() -> dict[str, str]:
+    """Build Basic auth headers for the Atlassian MCP server."""
+    creds = base64.b64encode(f"{JIRA_EMAIL}:{MCP_API_TOKEN}".encode()).decode()
+    return {"Authorization": f"Basic {creds}"}
 
 
 # ---------------------------------------------------------------------------
@@ -498,12 +450,7 @@ async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user:
     )
 
     try:
-        access_token = _get_atlassian_access_token()
-        mcp_headers: dict[str, str] = {"Authorization": f"Bearer {access_token}"}
-        if ATLASSIAN_CLOUD_ID:
-            mcp_headers["X-Atlassian-Cloud-Id"] = ATLASSIAN_CLOUD_ID
-
-        async with streamablehttp_client(MCP_URL, headers=mcp_headers) as (read, write, _):
+        async with streamablehttp_client(MCP_URL, headers=_mcp_auth_headers()) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await _call_mcp_tool(
