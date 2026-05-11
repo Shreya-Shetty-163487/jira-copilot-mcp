@@ -29,6 +29,15 @@ APP_PORT             = int(os.getenv("PORT", "8000"))
 GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPO   = os.getenv("GITHUB_REPO", "")   # owner/repo, e.g. Shreya-Shetty-163487/jira-copilot-mcp
 GITHUB_API    = "https://api.github.com"
+COPILOT_ASSIGNEE = "copilot-swe-agent[bot]"
+JIRA_LINK_MARKER = "<!-- jira-key:"
+
+# ---------------------------------------------------------------------------
+# Ticket quality check (GitHub Models / GPT-4o)
+# ---------------------------------------------------------------------------
+GITHUB_MODELS_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
+GITHUB_MODELS_MODEL    = "gpt-4o"
+QUALITY_PASS_SCORE     = 6
 
 # ---------------------------------------------------------------------------
 # Atlassian OAuth2 (for MCP server auth)
@@ -171,19 +180,122 @@ def _github_headers() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Create a GitHub Issue assigned to Copilot Coding Agent
+# Ticket quality validation via GitHub Models (GPT-4o)
+# ---------------------------------------------------------------------------
+def _validate_ticket_quality(ticket_key: str, summary: str, description: str) -> dict[str, Any]:
+    """Score the Jira ticket for clarity/completeness. Returns quality dict."""
+    prompt = f"""You are a senior engineering manager reviewing a Jira ticket before it gets assigned to an AI coding agent.
+Score the ticket strictly from 0 to 10 based on how actionable and unambiguous it is for an AI to implement without any human follow-up.
+
+Scoring criteria:
+- Title clarity (is it specific, not vague like 'fix bug') [0-2]
+- Description completeness (what to build, not just what's wrong) [0-2]
+- Acceptance criteria present and testable [0-2]
+- Edge cases or error scenarios mentioned [0-2]
+- No ambiguous words like 'improve', 'enhance', 'maybe', 'somehow' [0-2]
+
+JIRA TICKET:
+Title: {summary}
+Description: {description or '(empty)'}
+
+Respond with ONLY valid JSON — no explanation, no markdown fences.
+{{{{
+  "score": <integer 0-10>,
+  "dimension_scores": {{{{
+    "title_clarity": <0-2>,
+    "description_completeness": <0-2>,
+    "acceptance_criteria": <0-2>,
+    "edge_cases": <0-2>,
+    "no_ambiguity": <0-2>
+  }}}},
+  "missing": ["<section completely absent>"],
+  "improvements": ["<specific problem with current content>"],
+  "rewritten_title": "<actionable rewrite of the title>",
+  "rewritten_description": "<2-3 sentence rewrite stating exactly what to build>",
+  "example_acceptance_criteria": [
+    "<testable criterion 1>",
+    "<testable criterion 2>"
+  ],
+  "example_edge_cases": [
+    "<edge case 1>",
+    "<edge case 2>"
+  ]
+}}}}"""
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": GITHUB_MODELS_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        resp = http_requests.post(GITHUB_MODELS_ENDPOINT, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+    except http_requests.RequestException as exc:
+        logger.error("[%s] Quality check API failed: %s", ticket_key, exc)
+        return {"score": QUALITY_PASS_SCORE, "skipped": True}  # pass through on failure
+
+    raw = resp.json()["choices"][0]["message"]["content"] or ""
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.split("```", 2)[1]
+        if stripped.startswith("json"):
+            stripped = stripped[4:]
+        stripped = stripped.rsplit("```", 1)[0].strip()
+
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        logger.error("[%s] Quality check returned invalid JSON: %s", ticket_key, raw[:200])
+        return {"score": QUALITY_PASS_SCORE, "skipped": True}
+
+
+# ---------------------------------------------------------------------------
+# Create a GitHub Issue and assign to Copilot Coding Agent
 # ---------------------------------------------------------------------------
 async def _create_github_issue(ticket_key: str, summary: str, description: str) -> None:
     if not GITHUB_TOKEN or not GITHUB_REPO:
         logger.warning("[%s] GITHUB_TOKEN or GITHUB_REPO not set — skipping", ticket_key)
         return
 
+    # --- Ticket quality gate ---
+    quality = _validate_ticket_quality(ticket_key, summary, description)
+    score = int(quality.get("score", 0))
+    logger.info("[%s] Ticket quality score: %d/10", ticket_key, score)
+
+    quality_section = ""
+    if score < QUALITY_PASS_SCORE:
+        logger.warning("[%s] Low quality score (%d < %d) — creating issue with warnings", ticket_key, score, QUALITY_PASS_SCORE)
+        missing = quality.get("missing", [])
+        improvements = quality.get("improvements", [])
+        quality_section = (
+            f"\n\n> **WARNING: Ticket Quality (score: {score}/10)**\n"
+            f"> Missing: {', '.join(missing) if missing else 'N/A'}\n"
+            f"> Improvements: {', '.join(improvements) if improvements else 'N/A'}\n"
+            f"> Suggested title: {quality.get('rewritten_title', 'N/A')}\n"
+            f"> Suggested description: {quality.get('rewritten_description', 'N/A')}\n"
+        )
+
+    jira_base_url = os.getenv("JIRA_BASE_URL", "").strip("'\"")
+    jira_url = f"{jira_base_url}/browse/{ticket_key}" if jira_base_url else ticket_key
+
     title = f"[{ticket_key}] {summary}"
     body = (
-        f"**Jira Ticket:** {ticket_key}\n\n"
-        f"**Description:**\n{description}\n\n"
+        f"## {summary}\n\n"
+        f"**Description:**\n{description}\n"
+        f"{quality_section}\n"
+        f"## Definition of done\n\n"
+        f"- [ ] Code implemented\n"
+        f"- [ ] Tests written and passing\n"
+        f"- [ ] No breaking changes to existing endpoints/pages\n\n"
         f"---\n"
-        f"_Auto-created from Jira webhook. Assigned to Copilot Coding Agent._"
+        f"**Jira ticket:** [{ticket_key}]({jira_url})\n"
+        f"{JIRA_LINK_MARKER} {ticket_key} -->\n"
+        f"_Auto-created from Jira webhook._"
     )
 
     resp = http_requests.post(
@@ -205,6 +317,40 @@ async def _create_github_issue(ticket_key: str, summary: str, description: str) 
         "[%s] GitHub Issue #%s created: %s",
         ticket_key, issue_number, issue_data.get("html_url"),
     )
+
+    # --- Assign to Copilot Coding Agent ---
+    _assign_copilot(ticket_key, issue_number)
+
+
+# ---------------------------------------------------------------------------
+# Assign to Copilot Coding Agent (with fallback to @copilot comment)
+# ---------------------------------------------------------------------------
+def _assign_copilot(ticket_key: str, issue_number: int) -> None:
+    """Try assignee API with copilot-swe-agent[bot], fall back to @copilot comment."""
+    # Attempt 1: Assign via API
+    assign_resp = http_requests.post(
+        f"{GITHUB_API}/repos/{GITHUB_REPO}/issues/{issue_number}/assignees",
+        headers=_github_headers(),
+        json={"assignees": [COPILOT_ASSIGNEE]},
+    )
+    if assign_resp.ok:
+        assignees = [a.get("login", "") for a in assign_resp.json().get("assignees", [])]
+        if any("copilot" in a.lower() for a in assignees):
+            logger.info("[%s] Assigned %s to Issue #%s", ticket_key, COPILOT_ASSIGNEE, issue_number)
+            return
+
+    logger.warning("[%s] Assignee API didn't stick, falling back to @copilot comment", ticket_key)
+
+    # Attempt 2: Trigger via @copilot comment
+    comment_resp = http_requests.post(
+        f"{GITHUB_API}/repos/{GITHUB_REPO}/issues/{issue_number}/comments",
+        headers=_github_headers(),
+        json={"body": "@copilot implement this issue."},
+    )
+    if comment_resp.ok:
+        logger.info("[%s] Triggered @copilot via comment on Issue #%s", ticket_key, issue_number)
+    else:
+        logger.error("[%s] Failed to trigger @copilot: %s", ticket_key, comment_resp.text[:200])
 
 
 # ---------------------------------------------------------------------------
