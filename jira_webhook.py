@@ -32,6 +32,9 @@ GITHUB_API    = "https://api.github.com"
 COPILOT_ASSIGNEE = "copilot-swe-agent[bot]"
 JIRA_LINK_MARKER = "<!-- jira-key:"
 
+# Track PRs we've already posted Jira comments for (avoids duplicates across opened/merged)
+_commented_prs: set[str] = set()
+
 # ---------------------------------------------------------------------------
 # Ticket quality check (GitHub Models / GPT-4o)
 # ---------------------------------------------------------------------------
@@ -137,9 +140,14 @@ async def github_webhook(
     if not pr:
         return {"received": True, "skipped": "not a pull_request event"}
 
-    if action not in ("opened", "ready_for_review"):
-        logger.info("[GitHub] PR action=%s \u2014 ignoring (only handle 'opened'/'ready_for_review')", action)
+    if action not in ("opened", "ready_for_review", "closed"):
+        logger.info("[GitHub] PR action=%s -- ignoring", action)
         return {"received": True, "skipped": f"action={action}"}
+
+    # For 'closed', only act if the PR was merged
+    if action == "closed" and not pr.get("merged", False):
+        logger.info("[GitHub] PR closed without merge -- ignoring")
+        return {"received": True, "skipped": "closed without merge"}
 
     pr_url   = pr.get("html_url", "")
     pr_title = pr.get("title", "")
@@ -147,7 +155,7 @@ async def github_webhook(
     pr_user  = pr.get("user", {}).get("login", "")
     pr_num   = pr.get("number", "?")
 
-    logger.info("[GitHub] PR #%s opened by %s: %s", pr_num, pr_user, pr_title)
+    logger.info("[GitHub] PR #%s %s by %s: %s", pr_num, "merged" if action == "closed" else action, pr_user, pr_title)
 
     # Extract Jira ticket key from PR title or body (e.g., PROJ-123)
     jira_key = _extract_jira_key(pr_title) or _extract_jira_key(pr_body)
@@ -160,7 +168,15 @@ async def github_webhook(
         logger.warning("[GitHub] No Jira ticket key found in PR #%s title/body/linked issues -- skipping", pr_num)
         return {"received": True, "skipped": "no Jira key found"}
 
-    logger.info("[GitHub] Found Jira key %s in PR #%s — posting comment", jira_key, pr_num)
+    logger.info("[GitHub] Found Jira key %s in PR #%s -- posting comment", jira_key, pr_num)
+
+    # Deduplicate: don't post twice for the same PR (opened + merged)
+    dedup_key = f"{jira_key}:{pr_num}"
+    if dedup_key in _commented_prs:
+        logger.info("[GitHub] Already posted comment for %s PR #%s -- skipping", jira_key, pr_num)
+        return {"received": True, "skipped": "already commented"}
+    _commented_prs.add(dedup_key)
+
     background_tasks.add_task(_post_jira_comment, jira_key, pr_url, pr_title, pr_user)
 
     return {"received": True, "jira_key": jira_key, "pr": pr_num}
