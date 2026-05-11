@@ -512,6 +512,7 @@ async def _post_jira_comment(jira_key: str, pr_url: str, pr_title: str, pr_user:
                         "issueIdOrKey": jira_key,
                         "cloudId": ATLASSIAN_CLOUD_ID,
                         "commentBody": comment_body,
+                        "contentFormat": "markdown",
                     },
                     jira_key,
                 )
