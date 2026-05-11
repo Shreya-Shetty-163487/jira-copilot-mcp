@@ -11,7 +11,7 @@
   }
 
   .post-card {
-    background: #ffffff;
+    background: var(--card-bg-color);
     border-radius: 12px;
     padding: 24px 24px 20px;
     box-shadow: 0 1px 4px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
@@ -31,19 +31,19 @@
   }
   .post-card h2 a {
     text-decoration: none;
-    color: #0f172a;
+    color: var(--heading-color);
   }
-  .post-card h2 a:hover { color: #2563eb; }
+  .post-card h2 a:hover { color: var(--link-color); }
 
   .meta {
     font-size: 0.78rem;
-    color: #94a3b8;
+    color: var(--meta-text-color);
     margin-bottom: 12px;
   }
 
   .excerpt {
     font-size: 0.92rem;
-    color: #475569;
+    color: var(--secondary-text-color);
     line-height: 1.6;
     flex: 1;
   }
@@ -52,7 +52,7 @@
     display: inline-block;
     margin-top: 16px;
     font-size: 0.85rem;
-    color: #2563eb;
+    color: var(--link-color);
     text-decoration: none;
     font-weight: 600;
   }
@@ -61,7 +61,7 @@
   .empty-state {
     text-align: center;
     padding: 60px 20px;
-    color: #94a3b8;
+    color: var(--meta-text-color);
   }
   .empty-state p { margin-bottom: 20px; font-size: 1.1rem; }
 </style>

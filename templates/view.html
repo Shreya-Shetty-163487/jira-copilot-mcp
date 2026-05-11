@@ -8,22 +8,22 @@
     display: inline-block;
     margin-bottom: 20px;
     font-size: 0.85rem;
-    color: #2563eb;
+    color: var(--link-color);
     text-decoration: none;
   }
   .back-link:hover { text-decoration: underline; }
 
   .post-header { margin-bottom: 24px; }
-  .post-header h1 { font-size: 2.2rem; color: #0f172a; margin-bottom: 10px; }
+  .post-header h1 { font-size: 2.2rem; color: var(--heading-color); margin-bottom: 10px; }
 
   .meta {
     font-size: 0.85rem;
-    color: #94a3b8;
+    color: var(--meta-text-color);
   }
 
   .divider {
     border: none;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid var(--divider-color);
     margin: 24px 0;
   }
 
@@ -45,43 +45,45 @@
 
   /* Comments */
   .comments-section { margin-top: 40px; }
-  .comments-section h2 { font-size: 1.4rem; color: #0f172a; margin-bottom: 16px; }
+  .comments-section h2 { font-size: 1.4rem; color: var(--heading-color); margin-bottom: 16px; }
 
   .comment-card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    background: var(--comment-bg-color);
+    border: 1px solid var(--comment-border-color);
     border-radius: 8px;
     padding: 14px 18px;
     margin-bottom: 12px;
   }
   .comment-card .comment-meta {
     font-size: 0.82rem;
-    color: #94a3b8;
+    color: var(--meta-text-color);
     margin-bottom: 6px;
   }
   .comment-card .comment-body { font-size: 1rem; line-height: 1.6; white-space: pre-wrap; }
 
-  .no-comments { color: #94a3b8; font-style: italic; margin-bottom: 16px; }
+  .no-comments { color: var(--meta-text-color); font-style: italic; margin-bottom: 16px; }
 
   .comment-form { margin-top: 20px; }
-  .comment-form h3 { font-size: 1.1rem; margin-bottom: 12px; color: #0f172a; }
+  .comment-form h3 { font-size: 1.1rem; margin-bottom: 12px; color: var(--heading-color); }
   .comment-form input,
   .comment-form textarea {
     width: 100%;
     padding: 10px 12px;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--input-border-color);
     border-radius: 6px;
     font-family: inherit;
     font-size: 0.95rem;
     margin-bottom: 10px;
     box-sizing: border-box;
     transition: border-color 0.2s, box-shadow 0.2s;
+    background: var(--input-bg-color);
+    color: var(--input-text-color);
   }
   .comment-form input:focus,
   .comment-form textarea:focus {
     outline: none;
-    border-color: #2563eb;
-    box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+    border-color: var(--input-focus-border);
+    box-shadow: 0 0 0 3px var(--input-focus-shadow);
   }
   .comment-form textarea { resize: vertical; min-height: 80px; }
 </style>
