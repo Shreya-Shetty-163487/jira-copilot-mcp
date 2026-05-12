@@ -38,6 +38,7 @@
       --alert-bg-color: #ffe4e4;
       --alert-border-color: #cc3333;
       --alert-text-color: #8b0000;
+      --card-border-color: transparent;
     }
 
     :root[data-theme="dark"] {
@@ -64,6 +65,7 @@
       --alert-bg-color: #1f1f1f;
       --alert-border-color: #facc15;
       --alert-text-color: #fef08a;
+      --card-border-color: #eab308;
     }
 
     /* ── Nav ── */
@@ -74,14 +76,25 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      position: relative;
       box-shadow: 0 1px 4px rgba(0,0,0,0.06);
     }
     nav .brand {
       font-size: 1.5rem;
       font-weight: 700;
+      font-family: 'Brush Script MT', 'Lucida Handwriting', cursive;
       color: var(--btn-bg-color);
       text-decoration: none;
       letter-spacing: 0.5px;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    @media (max-width: 480px) {
+      nav .brand {
+        position: static;
+        transform: none;
+      }
     }
     nav a.btn-nav {
       background: var(--btn-bg-color);
@@ -149,6 +162,7 @@
     /* ── Card ── */
     .card {
       background: var(--card-bg-color);
+      border: 1px solid var(--card-border-color);
       border-radius: 8px;
       padding: 28px 32px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.08);
