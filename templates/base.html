@@ -82,13 +82,19 @@
     nav .brand {
       font-size: 1.5rem;
       font-weight: 700;
-      font-family: cursive;
+      font-family: 'Brush Script MT', 'Lucida Handwriting', cursive;
       color: var(--btn-bg-color);
       text-decoration: none;
       letter-spacing: 0.5px;
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
+    }
+    @media (max-width: 480px) {
+      nav .brand {
+        position: static;
+        transform: none;
+      }
     }
     nav a.btn-nav {
       background: var(--btn-bg-color);
